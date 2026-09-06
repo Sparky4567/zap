@@ -5,7 +5,6 @@
 #   POST /transcribe  (body: wav bytes) -> {"text": ...}
 #   GET  /health -> {"ok": true, "model": ...}
 import argparse
-import io
 import json
 import tempfile
 import os
@@ -33,12 +32,20 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _json(self, obj, code=200):
-        body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = json.dumps(obj).encode()
+        except Exception:
+            body = b'{"error": "encode failed"}'
+            code = 500
+        try:
+            self.send_response(code)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
+            # Client went away (barge-in abort / timeout). Not a server bug.
+            pass
 
     def do_GET(self):
         if self.path == "/health":
@@ -48,23 +55,52 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/transcribe":
             return self._json({"error": "not found"}, 404)
-        length = int(self.headers.get("content-length", 0) or 0)
+        try:
+            length = int(self.headers.get("content-length", 0) or 0)
+        except ValueError:
+            return self._json({"error": "bad content-length"}, 400)
         if length <= 0 or length > 20 * 1024 * 1024:
             return self._json({"error": "bad audio size"}, 400)
-        wav = self.rfile.read(length)
+        try:
+            wav = self.rfile.read(length)
+        except (OSError, ValueError):
+            return
+        if not wav:
+            return self._json({"error": "empty audio"}, 400)
         try:
             model = get_model()
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(wav)
                 path = f.name
             try:
-                segments, info = model.transcribe(path, beam_size=1, vad_filter=True)
-                text = "".join(s.text for s in segments).strip()
+                try:
+                    segments, info = model.transcribe(path, beam_size=1, vad_filter=True)
+                    text = "".join(s.text for s in segments).strip()
+                except Exception as e:
+                    # onnxruntime missing -> VAD unavailable; retry without VAD.
+                    msg = str(e).lower()
+                    if "onnx" in msg or "vad" in msg or "silero" in msg:
+                        segments, info = model.transcribe(path, beam_size=1, vad_filter=False)
+                        text = "".join(s.text for s in segments).strip()
+                    else:
+                        raise
             finally:
-                os.unlink(path)
-            return self._json({"text": text, "language": getattr(info, "language", None)})
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            try:
+                return self._json({"text": text, "language": getattr(info, "language", None)})
+            except (OSError, ValueError):
+                return
+        except (OSError, ValueError):
+            # Client aborted mid-transcribe (barge-in). Silence is expected.
+            return
         except Exception as e:  # noqa: BLE001
-            return self._json({"error": str(e)[:500]}, 500)
+            try:
+                return self._json({"error": str(e)[:500]}, 500)
+            except (OSError, ValueError):
+                return
 
 
 def main():
