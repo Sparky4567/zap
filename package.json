@@ -1,0 +1,20 @@
+{
+  "name": "zap",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts",
+    "stt": "python3 sidecar/stt_server.py",
+    "memory-bridge": "python3 sidecar/mempalace_bridge.py",
+    "setup": "bash scripts/setup.sh",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}

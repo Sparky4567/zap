@@ -1,0 +1,5 @@
+faster-whisper>=1.0.0
+# Optional: real MemPalace memory backend (Bun falls back to built-in sqlite if absent)
+mempalace>=1.0.0; python_version >= "3.10"
+# Optional: Piper TTS via pip (or use scripts/setup.sh binary install)
+piper-tts>=1.2.0; sys_platform != "win32"
